@@ -1,14 +1,22 @@
 version: '2'
 services:
   nginx-proxy:
-    image: jwilder/nginx-proxy
-    container_name: nginx-proxy
+    build: .
     ports:
-      - "80:80"
+      - "180:80"
+      - "81:81"
     volumes:
       - /var/run/docker.sock:/tmp/docker.sock:ro
 
   whoami:
     image: jwilder/whoami
     environment:
-      - VIRTUAL_HOST=whoami.local
+      - VIRTUAL_HOST=whoami.loc
+
+  mysql:
+    image: mysql:5.6
+    environment:
+      VIRTUAL_TCP_HOST: whoami.loc
+      VIRTUAL_TCP_PORT: 3306
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: test

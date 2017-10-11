@@ -1,0 +1,67 @@
+{{ $CurrentContainer := where $ "ID" .Docker.CurrentContainerID | first }}
+
+{{ define "upstream" }}
+	{{ if .Address }}
+		{{/* If we got the containers from swarm and this container's port is published to host, use host IP:PORT */}}
+		{{ if and .Container.Node.ID .Address.HostPort }}
+			# {{ .Container.Node.Name }}/{{ .Container.Name }}
+			server {{ .Container.Node.Address.IP }}:{{ .Address.HostPort }};
+		{{/* If there is no swarm node or the port is not published on host, use container's IP:PORT */}}
+		{{ else if .Network }}
+			# {{ .Container.Name }}
+			server {{ .Network.IP }}:{{ .Address.Port }};
+		{{ end }}
+	{{ else if .Network }}
+		# {{ .Container.Name }}
+		server {{ .Network.IP }} down;
+	{{ end }}
+{{ end }}
+
+access_log off;
+error_log /var/log/nginx/debug.log debug;
+
+{{ if $.Env.RESOLVERS }}
+resolver {{ $.Env.RESOLVERS }};
+{{ end }}
+
+{{ $enable_ipv6 := eq (or ($.Env.ENABLE_IPV6) "") "true" }}
+
+{{ range $host, $containers := groupByMulti $ "Env.VIRTUAL_TCP_HOST" "," }}
+
+{{ $host := trim $host }}
+{{ $is_regexp := hasPrefix "~" $host }}
+{{ $upstream_name := when $is_regexp (sha1 $host) $host }}
+
+# {{ $host }}
+upstream {{ $upstream_name }} {
+
+{{ range $container := $containers }}
+	{{ $addrLen := len $container.Addresses }}
+
+	{{ range $knownNetwork := $CurrentContainer.Networks }}
+		{{ range $containerNetwork := $container.Networks }}
+			{{ if (and (ne $containerNetwork.Name "ingress") (or (eq $knownNetwork.Name $containerNetwork.Name) (eq $knownNetwork.Name "host"))) }}
+				## Can be connect with "{{ $containerNetwork.Name }}" network
+
+				{{/* If only 1 port exposed, use that */}}
+				{{ if eq $addrLen 1 }}
+					{{ $address := index $container.Addresses 0 }}
+					{{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
+				{{/* If more than one port exposed, use the one matching VIRTUAL_TCP_PORT env var, falling back to standard web port 81 */}}
+				{{ else }}
+					{{ $port := coalesce $container.Env.VIRTUAL_TCP_PORT "81" }}
+					{{ $address := where $container.Addresses "Port" $port | first }}
+					{{ template "upstream" (dict "Container" $container "Address" $address "Network" $containerNetwork) }}
+				{{ end }}
+			{{ end }}
+		{{ end }}
+	{{ end }}
+{{ end }}
+}
+
+server {
+	listen {{ $host }}:81;
+	proxy_pass {{ trim $upstream_name }};
+}
+
+{{ end }}
